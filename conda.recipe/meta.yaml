@@ -24,6 +24,8 @@ requirements:
     - pandas
     - pysam
     - numpy
+    - samtools
+    - requests
 
 
 test:

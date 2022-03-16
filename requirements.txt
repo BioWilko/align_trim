@@ -1,3 +1,4 @@
 pandas    
 pysam
 numpy
+requests
