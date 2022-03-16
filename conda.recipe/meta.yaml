@@ -1,0 +1,37 @@
+{% set name = "align_trim" %}
+{% set version = "0.1.0" %}
+{% set sha256 = "" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version|replace("-", "_") }}
+source:
+  url: https://github.com/artic-network/align_trim/archive/{{ version }}.tar.gz
+  sha256: {{ sha256 }}
+
+build:
+  number: 0
+  noarch: python
+  script: python -m pip install --ignore-installed .
+  entry_points:
+    - align_trim=artic.align_trim:main
+
+requirements:
+  host:
+    - python >=3
+    - pip
+  run:
+    - pandas
+    - pysam
+    - numpy
+
+
+test:
+  commands:
+    - align_trim -h
+
+about:
+    home: https://github.com/artic-network/align_trim/
+    license: MIT
+    license_file: LICENSE
+    summary: Align_trim - A tool for primer-trimming and normalising BAM files
