@@ -14,7 +14,7 @@ build:
   noarch: python
   script: python -m pip install --ignore-installed .
   entry_points:
-    - align_trim=artic.align_trim:main
+    - align_trim=align_trim.align_trim:main
 
 requirements:
   host:

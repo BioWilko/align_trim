@@ -1,0 +1,11 @@
+name: align_trim
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - pandas
+  - numpy
+  - samtools
+  - requests
+  - pysam
