@@ -5,13 +5,12 @@
 
 import argparse
 import pathlib
-import contextlib
-import pysam
 from subprocess import run
 import os
 
 from .scheme_downloader import get_scheme
-from .align_trim_funcs import overlap_trim
+
+from . import align_trim_funcs
 
 
 def main():
@@ -46,6 +45,9 @@ def main():
         help="Should primers be trimmed from BAM file",
     )
     parser.add_argument(
+        "--quiet", help="Do not print progress messages to stderr", action="store_true"
+    )
+    parser.add_argument(
         "--no-read-groups",
         dest="no_read_groups",
         action="store_true",
@@ -57,6 +59,11 @@ def main():
         action="store_true",
         dest="enforce_amplicon_span",
         help="Discard reads that do not cover the entire amplicon",
+    )
+    parser.add_argument(
+        "--illumina",
+        help="Set flag if providing a BAM generated using Illumina paired end sequencing",
+        action="store_true",
     )
     parser.add_argument(
         "--scheme-directory",
@@ -91,7 +98,7 @@ def run_pipeline(args):
     args.tempsam = pathlib.Path.joinpath(args.temp_dir, "temp.sam")
     args.tempbam = pathlib.Path.joinpath(args.temp_dir, "temp.bam")
 
-    overlap_trim(args)
+    align_trim_funcs.overlap_trim(args)
     run(["samtools", "view", "-b", "-o", args.tempbam, args.tempsam])
     run(["samtools", "sort", "-o", args.outfile, args.tempbam])
     run(["samtools", "index", args.outfile])
