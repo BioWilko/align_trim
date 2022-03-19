@@ -26,11 +26,12 @@ requirements:
     - numpy
     - samtools
     - requests
+    - click
 
 
 test:
   commands:
-    - align_trim -h
+    - align_trim --help
 
 about:
     home: https://github.com/artic-network/align_trim/

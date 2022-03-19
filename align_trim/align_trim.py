@@ -1,109 +1,84 @@
 #!/usr/bin/env python
 
 # Written by Nick Loman (@Pathogenomenick) and packaged by Sam Wilkinson (@BioWilko)
-# Thanks to Aaron Quinlan for the argparse implementation from poretools.
 
-import argparse
-import pathlib
-from subprocess import run
 import os
+import click
+from types import SimpleNamespace
+import pysam
 
-from .scheme_downloader import get_scheme
+from . import scheme_downloader
 
 from . import align_trim_funcs
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--temp-dir",
-        help="Directory to temporarily store intermediate files (default: current dir)",
-        type=pathlib.Path,
-        default=os.getcwd(),
-    )
-    parser.add_argument(
-        "--min-overlap",
-        type=int,
-        default=0,
-        dest="min_overlap",
-        help="Shortest allowed overlap to amplicon region",
-    )
-    parser.add_argument(
-        "--max-mutual-overlap",
-        type=int,
-        default=2,
-        dest="max_mutual_overlap",
-        help="Maximum permissable overlap to second amplicon region as proportion of amplicon mutual overlap",
-    )
-    parser.add_argument(
-        "--normalise", type=int, help="Subsample to n coverage per strand"
-    )
-    parser.add_argument("--report", type=pathlib.Path, help="Output report to file")
-    parser.add_argument(
-        "--trim-primers",
-        action="store_true",
-        help="Should primers be trimmed from BAM file",
-    )
-    parser.add_argument(
-        "--quiet", help="Do not print progress messages to stderr", action="store_true"
-    )
-    parser.add_argument(
-        "--no-read-groups",
-        dest="no_read_groups",
-        action="store_true",
-        help="Do not divide reads into groups in output",
-    )
-    parser.add_argument("--debug", action="store_true", help="Debug mode")
-    parser.add_argument(
-        "--enforce-amplicon-span",
-        action="store_true",
-        dest="enforce_amplicon_span",
-        help="Discard reads that do not cover the entire amplicon",
-    )
-    parser.add_argument(
-        "--illumina",
-        help="Set flag if providing a BAM generated using Illumina paired end sequencing",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--scheme-directory",
-        help="Directory containing primer schemes (e.g. ~/artic/primer-schemes)",
-        required=True,
-    )
-    parser.add_argument(
-        "scheme",
-        help="ARTIC primer scheme for scheme downloader (e.g. SARS-CoV-2/V4.1)",
-    )
-    parser.add_argument(
-        "bamfile",
-        help="Path to BAM file for primer-trimming / normalisation",
-        type=pathlib.Path,
-    )
-    parser.add_argument(
-        "outfile",
-        help="Path to save primertrimmed / normalised BAM file",
-        type=pathlib.Path,
-    )
-    args = parser.parse_args()
-    run_pipeline(args)
+@click.command()
+@click.option(
+    "--min-overlap",
+    type=click.IntRange(min=0),
+    default=0,
+    help="Shortest allowed overlap to amplicon region",
+)
+@click.option(
+    "--max-mutual-overlap",
+    type=click.FloatRange(min=0, max=1),
+    default=0.5,
+    help="Maximum permissable proportion of overlap between read/read-pair and the next top matching amplicon as a proportion of read length",
+)
+@click.option("--normalise", type=int, help="Subsample to n coverage per strand")
+@click.option("--report", type=click.Path(), help="Output report to file")
+@click.option(
+    "--trim-primers",
+    default=False,
+    is_flag=True,
+    help="Should primers be trimmed from BAM file",
+)
+@click.option(
+    "--verbose",
+    default=False,
+    is_flag=True,
+    help="Print decision log messages to stderr",
+)
+@click.option("--prefix", type=click.STRING, default="no_prefix_supplied")
+@click.option(
+    "--no-read-groups",
+    is_flag=True,
+    default=False,
+    help="Do not divide reads into groups in output",
+)
+@click.option("--disregard-supplemental-reads", default=True, is_flag=True)
+@click.option("--debug", default=False, is_flag=True)
+@click.option(
+    "--enforce-amplicon-span",
+    is_flag=True,
+    default=False,
+    help="Discard reads that do not cover the entire amplicon",
+)
+@click.argument(
+    "platform", type=click.Choice(["Illumina", "ONT"]), default="ONT", required=True
+)
+@click.option("--quiet", help="")
+@click.option("--output_filetype", type=click.Choice(["SAM", "BAM"]), default="SAM")
+@click.option(
+    "--scheme-directory",
+    help="Directory containing primer schemes (e.g. ~/artic/primer-schemes)",
+    required=True,
+)
+@click.option(
+    "--outdir",
+    type=click.Path(exists=True),
+    help="Directory in which to save outfile (supresses stdout)",
+)
+@click.argument("scheme")
+@click.argument("infile", type=click.Path(exists=True), required=True)
+def main(*_, **kwargs):
+    args = SimpleNamespace(**kwargs)
+    if args.infile and not os.path.exists(args.infile + ".bai"):
+        pysam.index(args.infile)
 
-
-def run_pipeline(args):
-
-    if not os.path.exists(pathlib.Path.joinpath(args.bamfile, ".bai")):
-        run(["samtools", "index", args.bamfile])
-
-    args.bedfile = get_scheme(args.scheme, args.scheme_directory)
-
-    args.tempsam = pathlib.Path.joinpath(args.temp_dir, "temp.sam")
-    args.tempbam = pathlib.Path.joinpath(args.temp_dir, "temp.bam")
+    args.bedfile = scheme_downloader.get_scheme(args.scheme, args.scheme_directory)
 
     align_trim_funcs.overlap_trim(args)
-    run(["samtools", "view", "-b", "-o", args.tempbam, args.tempsam])
-    run(["samtools", "sort", "-o", args.outfile, args.tempbam])
-    run(["samtools", "index", args.outfile])
-    os.remove(args.tempsam)
-    os.remove(args.tempbam)
 
 
 if __name__ == "__main__":
