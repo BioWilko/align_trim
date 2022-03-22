@@ -608,21 +608,23 @@ def overlap_trim(args):
                 try:
                     trim(args, segment, trim_end, True)
                 except Exception as e:
-                    print(
-                        "problem soft masking right primer in {} (error: {}), skipping".format(
-                            segment.query_name, e
-                        ),
-                        file=sys.stderr,
-                    )
+                    if args.verbose:
+                        print(
+                            "problem soft masking right primer in {} (error: {}), skipping".format(
+                                segment.query_name, e
+                            ),
+                            file=sys.stderr,
+                        )
                     continue
 
             # check the the alignment still contains bases matching the reference
             if "M" not in segment.cigarstring:
-                print(
-                    "%s dropped as does not match reference post masking"
-                    % (segment.query_name),
-                    file=sys.stderr,
-                )
+                if args.verbose:
+                    print(
+                        "%s dropped as does not match reference post masking"
+                        % (segment.query_name),
+                        file=sys.stderr,
+                    )
                 continue
 
             # current alignment segment has passed filters, send it to the outfile

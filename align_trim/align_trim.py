@@ -55,7 +55,11 @@ from . import align_trim_funcs
     help="Discard reads that do not cover the entire amplicon",
 )
 @click.argument(
-    "platform", type=click.Choice(["Illumina", "ONT"]), default="ONT", required=True
+    "platform",
+    type=click.Choice(["illumina", "ONT"]),
+    default="ONT",
+    required=True,
+    help="Provide the sequencing platform used. ONT should work for other non-paired sequencing platforms but this has not been tested",
 )
 @click.option("--quiet", help="")
 @click.option("--output_filetype", type=click.Choice(["SAM", "BAM"]), default="SAM")
@@ -69,7 +73,10 @@ from . import align_trim_funcs
     type=click.Path(exists=True),
     help="Directory in which to save outfile (supresses stdout)",
 )
-@click.argument("scheme")
+@click.argument(
+    "scheme",
+    help="Provide scheme and scheme version in the following format - 'scheme/version' (e.g. SARS-CoV-2/V4.1)",
+)
 @click.argument("infile", type=click.Path(exists=True), required=True)
 def main(*_, **kwargs):
     args = SimpleNamespace(**kwargs)
