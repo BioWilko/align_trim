@@ -73,10 +73,7 @@ from . import align_trim_funcs
     type=click.Path(exists=True),
     help="Directory in which to save outfile (supresses stdout)",
 )
-@click.argument(
-    "scheme",
-    help="Provide scheme and scheme version in the following format - 'scheme/version' (e.g. SARS-CoV-2/V4.1)",
-)
+@click.argument("scheme")
 @click.argument("infile", type=click.Path(exists=True), required=True)
 def main(*_, **kwargs):
     args = SimpleNamespace(**kwargs)
