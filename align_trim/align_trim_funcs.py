@@ -595,12 +595,13 @@ def overlap_trim(args):
                 try:
                     trim(args, segment, trim_start, False)
                 except Exception as e:
-                    print(
-                        "problem soft masking left primer in {} (error: {}), skipping".format(
-                            segment.query_name, e
-                        ),
-                        file=sys.stderr,
-                    )
+                    if args.verbose:
+                        print(
+                            "problem soft masking left primer in {} (error: {}), skipping".format(
+                                segment.query_name, e
+                            ),
+                            file=sys.stderr,
+                        )
                     continue
 
             # softmask the alignment if right primer start/end inside alignment
