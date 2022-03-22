@@ -55,11 +55,7 @@ from . import align_trim_funcs
     help="Discard reads that do not cover the entire amplicon",
 )
 @click.argument(
-    "platform",
-    type=click.Choice(["illumina", "ONT"]),
-    default="ONT",
-    required=True,
-    help="Provide the sequencing platform used. ONT should work for other non-paired sequencing platforms but this has not been tested",
+    "platform", type=click.Choice(["illumina", "ONT"]), default="ONT", required=True,
 )
 @click.option("--quiet", help="")
 @click.option("--output_filetype", type=click.Choice(["SAM", "BAM"]), default="SAM")
