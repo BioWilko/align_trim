@@ -462,11 +462,12 @@ def first_pass_paired(args, bam, amplicons):
 
             # if both primers, we call that "correctly paired"
             if args.enforce_amplicon_span and not all(extends):
-                print(
-                    "%s and %s skipped as pair does not fully span amplicon: %s"
-                    % (segment1.query_name, segment2.query_name, extends),
-                    file=sys.stderr,
-                )
+                if args.verbose:
+                    print(
+                        "%s and %s skipped as pair does not fully span amplicon: %s"
+                        % (segment1.query_name, segment2.query_name, extends),
+                        file=sys.stderr,
+                    )
                 continue
             for segment in (segment1, segment2):
                 passing_reads[amplicon["name"], segment.is_reverse].append(
@@ -514,7 +515,7 @@ def overlap_trim(args):
         ),
         dtype=[
             ("name", int),
-            ("pool", str),
+            ("pool", int),
             ("insert_start", int),
             ("insert_end", int),
             ("start", int),
@@ -534,7 +535,7 @@ def overlap_trim(args):
                 read_group["ID"] = pool
                 bam_header["RG"].append(read_group)
 
-        if args.platform == "Illumina":
+        if args.platform == "illumina":
             passing_reads = first_pass_paired(args, bam, amplicons)
         else:
             passing_reads = first_pass_single(args, bam, amplicons)
@@ -559,14 +560,12 @@ def overlap_trim(args):
 
     out_ft = "" if args.output_filetype == "SAM" else "b"
 
+    out_path = os.path.join(args.outdir, args.prefix + ".bam") if args.outdir else None
+
     out_fh = (
         pysam.AlignmentFile("-", "w" + out_ft, header=bam_header)
         if not args.outdir
-        else pysam.AlignmentFile(
-            os.path.join(args.outdir, args.prefix + ".bam"),
-            "w" + out_ft,
-            header=bam_header,
-        )
+        else pysam.AlignmentFile(out_path, "w" + out_ft, header=bam_header,)
     )
 
     with pysam.AlignmentFile(args.infile, "rb") as bam, out_fh as outfile:
@@ -665,3 +664,8 @@ def overlap_trim(args):
                 )
                 print(report, file=reportfh)
             outfile.write(segment)
+    if args.outdir:
+        pysam.sort(
+            "-o", out_path, out_path,
+        )
+
