@@ -493,7 +493,6 @@ def overlap_trim(args):
     # open the primer scheme and get the pools
     bed = read_bed_file(args.bedfile)
     pools = set(row["PoolName"] for row in bed)
-    pools.add("unmatched")
     primer_pairs = defaultdict(dict)
     for b in bed:
         scheme, pair, side = b["Primer_ID"].split("_")
@@ -533,6 +532,7 @@ def overlap_trim(args):
             for pool in pools:
                 read_group = {}
                 read_group["ID"] = pool
+                read_group["SM"] = "pool_" + pool
                 bam_header["RG"].append(read_group)
 
         if args.platform == "illumina":
