@@ -560,7 +560,11 @@ def overlap_trim(args):
 
     out_ft = "" if args.output_filetype == "SAM" else "b"
 
-    out_path = os.path.join(args.outdir, args.prefix + ".bam") if args.outdir else None
+    out_extension = ".bam" if args.output_filetype == "BAM" else ".sam"
+
+    out_path = (
+        os.path.join(args.outdir, args.prefix + out_extension) if args.outdir else None
+    )
 
     out_fh = (
         pysam.AlignmentFile("-", "w" + out_ft, header=bam_header)
