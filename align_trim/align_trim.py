@@ -54,9 +54,6 @@ from . import align_trim_funcs
     default=False,
     help="Discard reads that do not cover the entire amplicon",
 )
-@click.argument(
-    "platform", type=click.Choice(["illumina", "ONT"]), default="ONT", required=True,
-)
 @click.option("--quiet", help="")
 @click.option("--output_filetype", type=click.Choice(["SAM", "BAM"]), default="SAM")
 @click.option(
@@ -75,6 +72,8 @@ def main(*_, **kwargs):
     args = SimpleNamespace(**kwargs)
     if args.infile and not os.path.exists(args.infile + ".bai"):
         pysam.index(args.infile)
+
+    args.paired = align_trim_funcs.paired_check(args.infile)
 
     args.bedfile = scheme_downloader.get_scheme(args.scheme, args.scheme_directory)
 

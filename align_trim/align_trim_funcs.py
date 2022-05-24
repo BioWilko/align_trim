@@ -146,9 +146,9 @@ def read_bed_file(fn):
     return [value for value in bedFile.values()]
 
 
-def read_pair_generator(bam, region_string=None):
+def read_pair_generator(bam):
     """
-    Generate read pairs in a BAM file or within a region string.
+    Generate read pairs in a BAM file.
     Reads are added to read_dict until a pair is found.
     """
     read_dict = defaultdict(lambda: [None, None])
@@ -170,9 +170,22 @@ def read_pair_generator(bam, region_string=None):
 
 
 def overlap_size(o1, o2):
-    s1, e1 = sorted(o1)
-    s2, e2 = sorted(o2)
-    return min(e1, e2) - max(s1, s2)
+    """
+    Get the mutual overlap between two (start, end) tuples of reference co-ordinates.
+    Parameters
+    ----------
+    o1 : tuple
+        First pair of co-ordinates
+    o2 : tuple
+        Second pair of co-ordinates
+    Returns
+    -------
+    int
+        An integer representing the mutual overlap size between the two sets of co-ordinates.
+    """
+    start_1, end_1 = sorted(o1)
+    start_2, end_2 = sorted(o2)
+    return min(end_1, end_2) - max(start_1, start_2)
 
 
 def trim(args, segment, primer_pos, end):
@@ -281,215 +294,226 @@ def trim(args, segment, primer_pos, end):
     segment.cigartuples = cigar
 
 
-def segment_overlaps(segment, amplicons):
+def paired_check(bam_path):
+    """
+    Check the first 1000 reads of a bam file and check whether any are paired.
+    """
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        for i, read in enumerate(bam):
+            if i >= 1000:
+                break
+            elif read.is_paired:
+                return True
+        return False
+
+
+def segment_overlaps(segment, amplicons, candidate_amplicon, limits):
     overlaps = np.zeros(len(amplicons), dtype=int)
 
-    for i, amp in enumerate(amplicons):
-        overlaps[i] = segment.get_overlap(amp["start"], amp["end"])
+    # If candidate amplicon is not the first or last in scheme get number of overlapping positions
+    # for the candidate amplicon and the amplicon either side (doing all overlaps for all reads is very slow)
+    candidate_amps = (
+        candidate
+        for candidate in (
+            candidate_amplicon - 1,
+            candidate_amplicon,
+            candidate_amplicon + 1,
+        )
+        if candidate not in limits
+    )
+
+    for amp in candidate_amps:
+        candidate_record = amplicons[amp]
+        overlaps[amp] = segment.get_overlap(
+            candidate_record["start"], candidate_record["end"]
+        )
     best, second = overlaps.argsort()[-2:][::-1]
     return overlaps, best, second
 
 
-def first_pass_single(args, bam, amplicons):
-    passing_reads = defaultdict(list)  # by (amplicon, is_reverse)
-    n_reads = bam.get_index_statistics()[0].total
+def gen_candidate_amp_map(amplicons, ref_length):
+    """
+    Make a mapping array of the same length as the BAM reference sequence where each position has a candidate amplicon.
+    This is quite imprecise (especially near boundaries) but since we also look at the amplicon either side of the read 
+    this is acceptable considering the large speedup.
+    This does assume that the amplicons are named sequentially based on position, possible limitation for non-ARTIC schemes.
 
-    with click.progressbar(bam, length=n_reads) as bam_iterator_bar:
-        for segment in bam_iterator_bar:
-            # filter out unmapped and supplementary alignment segments
-            if segment.is_unmapped:
-                if args.verbose:
-                    print(
-                        "%s skipped as unmapped" % (segment.query_name), file=sys.stderr
-                    )
-                continue
-            if segment.is_supplementary and args.disregard_supplemental_reads:
-                if args.verbose:
-                    print(
-                        "%s skipped as supplementary" % (segment.query_name),
-                        file=sys.stderr,
-                    )
-                continue
+    TODO: Add internal amplicon numbering in cases where amplicons are not sequentially named.
+    """
+    map = np.zeros(ref_length + 1, dtype=int)
 
-            overlaps, best, second = segment_overlaps(segment, amplicons)
+    for i, amp in enumerate(amplicons):
+        for pos in range(amp["start"], amp["end"]):
+            map[pos] = i
+    return map
 
-            # don't take reads if the second best overlap is a large proportion
-            # of the mutual overlap of the amplicons
-            best_amplicon = amplicons[best]
-            second_amplicon = amplicons[second]
-            mutual = overlap_size(
-                *(
-                    (amp["start"], amp["end"])
-                    for amp in (best_amplicon, second_amplicon)
-                )
+
+def secondary_segment_checks(args, amplicons, overlaps, best, second, segment):
+    # don't take reads if the second best overlap is a large proportion
+    # of the mutual overlap of the amplicons
+    best_amplicon = amplicons[best]
+    second_amplicon = amplicons[second]
+    mutual = overlap_size(
+        *((amp["start"], amp["end"]) for amp in (best_amplicon, second_amplicon))
+    )
+    if overlaps[second] > 1 / args.max_mutual_overlap * mutual:
+        if args.verbose:
+            print(
+                "%s skipped as large secondary overlap" % (segment.qname),
+                file=sys.stderr,
             )
-            if overlaps[second] > 1 / args.max_mutual_overlap * mutual:
-                if args.verbose:
-                    print(
-                        "%s skipped as large secondary overlap" % segment.qname,
-                        file=sys.stderr,
-                    )
-                continue
-            overlap = overlaps[best]
-            amplicon = amplicons[best]
+        return False
 
-            # check whether the alignment extends to the primer at each end
-            extends = (
-                segment.reference_start <= amplicon["insert_start"],
-                segment.reference_end >= amplicon["insert_end"],
+    if (
+        segment.reference_start < best_amplicon["start"]
+        or segment.reference_end > best_amplicon["end"]
+    ):
+        if args.verbose:
+            print(
+                "%s skipped as read maps outside best amplicon range" % (segment.qname),
+                file=sys.stderr,
             )
+        return False
 
-            # if both primers, we call that "correctly paired"
-            if args.enforce_amplicon_span and not all(extends):
-                if args.verbose:
-                    print(
-                        "%s skipped as does not span: %s"
-                        % (segment.query_name, extends),
-                        file=sys.stderr,
-                    )
-                continue
-
-            if (
-                segment.reference_start < best_amplicon["start"]
-                or segment.reference_end > best_amplicon["end"]
-            ):
-                if args.verbose:
-                    print(
-                        "%s skipped as read-pair maps outside best amplicon range"
-                        % (segment.qname),
-                        file=sys.stderr,
-                    )
-                continue
-            passing_reads[amplicon["name"], segment.is_reverse].append(
-                PassRead(segment.qname, amplicon["name"], overlap, *extends)
-            )
-    return passing_reads
+    return True
 
 
-def pick_paired_amplicon(segment1, segment2, amplicons):
-    # find overlaps for read pair rather than as individual reads
-
-    # determine the amplicon by largest overlap (and find second best)
-    overlaps1, best1, second1 = segment_overlaps(segment1, amplicons)
-    overlaps2, best2, second2 = segment_overlaps(segment2, amplicons)
-
-    # Combine overlap arrays within a read pair
-    combined_overlaps = overlaps1 + overlaps2
-    best, second = combined_overlaps.argsort()[-2:][::-1]
-
-    return combined_overlaps, best, second
-
-
-def first_pass_paired(args, bam, amplicons):
+def first_pass(args, bam, amplicons):
     passing_reads = defaultdict(list)  # by (amplicon, is_reverse)
     n_reads = bam.get_index_statistics()[0].total / 2
 
-    with click.progressbar(
-        read_pair_generator(bam), length=n_reads
-    ) as read_pair_generator_bar:
-        for segment1, segment2 in read_pair_generator_bar:
-            # Skip unpaired reads
-            if segment1 == None or segment2 == None:
-                continue
+    candidate_amplicon_map = gen_candidate_amp_map(amplicons, bam.lengths[0])
 
-            # filter out unmapped and supplementary alignment segments
-            passing_segments = []
-            for segment in (segment1, segment2):
-                if segment.is_unmapped:
-                    if args.verbose:
-                        print(
-                            "%s skipped as read is unmapped" % (segment.query_name),
-                            file=sys.stderr,
-                        )
+    limits = (
+        np.amax(candidate_amplicon_map) + 1,
+        np.amin(candidate_amplicon_map[np.nonzero(candidate_amplicon_map)] - 1),
+    )
+
+    if args.paired:
+        # Use clicks nice progress bar so users can have a pretty progress readout
+        with click.progressbar(
+            read_pair_generator(bam), length=n_reads
+        ) as bam_iterator_bar:
+            for segment1, segment2 in bam_iterator_bar:
+                if segment_checks(segment1) and segment_checks(segment2):
+                    candidate = candidate_amplicon_map[
+                        (segment1.reference_start + segment2.reference_end) // 2
+                    ]
+
+                    overlaps1, __1, __2 = segment_overlaps(
+                        segment1, amplicons, candidate, limits
+                    )
+                    overlaps2, __1, __2 = segment_overlaps(
+                        segment1, amplicons, candidate, limits
+                    )
+
+                    # Combine overlap arrays within a read pair
+                    overlaps = overlaps1 + overlaps2
+                    best, second = overlaps.argsort()[-2:][::-1]
+
+                else:
                     continue
-            if segment.is_supplementary and args.disregard_supplemental_reads:
-                if args.verbose:
-                    print(
-                        "%s skipped as supplementary" % (segment.query_name),
-                        file=sys.stderr,
+
+                if secondary_segment_checks(
+                    args, amplicons, overlaps, best, second, segment1
+                ) and secondary_segment_checks(
+                    args, amplicons, overlaps, best, second, segment2
+                ):
+                    overlap = overlaps[best]
+                    amplicon = amplicons[best]
+
+                    # check whether the insert extends to the primer at each end
+                    extends = (
+                        segment1.reference_start <= amplicon["insert_start"],
+                        segment2.reference_end >= amplicon["insert_end"],
                     )
-                continue
-                passing_segments.append(segment)
 
-            if len(passing_segments) == 1:
-                overlaps, best, second = segment_overlaps(
-                    passing_segments[0], amplicons
-                )
-            else:
-                overlaps, best, second = pick_paired_amplicon(
-                    segment1, segment2, amplicons
-                )
+                    # if both primers, we call that "correctly paired"
+                    if args.enforce_amplicon_span and not all(extends):
+                        if args.verbose:
+                            print(
+                                "%s and %s skipped as pair does not fully span amplicon: %s"
+                                % (segment1.query_name, segment2.query_name, extends),
+                                file=sys.stderr,
+                            )
+                        continue
+                    for segment in (segment1, segment2):
+                        passing_reads[amplicon["name"], segment.is_reverse].append(
+                            PassRead(segment.qname, amplicon["name"], overlap, *extends)
+                        )
 
-            # don't take reads if the second best overlap is a large proportion
-            # of the mutual overlap of the amplicons
-            best_amplicon = amplicons[best]
-            second_amplicon = amplicons[second]
-            mutual = overlap_size(
-                *(
-                    (amp["start"], amp["end"])
-                    for amp in (best_amplicon, second_amplicon)
-                )
-            )
-            if overlaps[second] > 1 / args.max_mutual_overlap * mutual:
-                if args.verbose:
-                    print(
-                        "%s and %s skipped as large secondary overlap"
-                        % (segment1.qname, segment2.qname),
-                        file=sys.stderr,
+    else:
+        with click.progressbar(bam, length=n_reads) as bam_iterator_bar:
+            for segment in bam_iterator_bar:
+                if segment_checks(args, segment):
+                    candidate = candidate_amplicon_map[
+                        (segment.reference_start + segment.reference_end) // 2
+                    ]
+
+                    overlaps, best, second = segment_overlaps(
+                        segment, amplicons, candidate, limits
                     )
-                continue
 
-            if (
-                segment1.reference_start < best_amplicon["start"]
-                or segment2.reference_end > best_amplicon["end"]
-            ):
-                if args.verbose:
-                    print(
-                        "%s and %s skipped as read-pair maps outside best amplicon range"
-                        % (segment1.qname, segment2.qname),
-                        file=sys.stderr,
+                else:
+                    continue
+                if secondary_segment_checks(
+                    args, amplicons, overlaps, best, second, segment
+                ):
+                    overlap = overlaps[best]
+                    amplicon = amplicons[best]
+
+                    # check whether the alignment extends to the primer at each end
+                    extends = (
+                        segment.reference_start <= amplicon["insert_start"],
+                        segment.reference_end >= amplicon["insert_end"],
                     )
-                continue
 
-            overlap = overlaps[best]
-            amplicon = amplicons[best]
+                    # if both primers, we call that "correctly paired"
+                    if args.enforce_amplicon_span and not all(extends):
+                        if args.verbose:
+                            print(
+                                "%s skipped as does not span: %s"
+                                % (segment.query_name, extends),
+                                file=sys.stderr,
+                            )
+                        continue
 
-            # check whether the insert extends to the primer at each end
-            extends = (
-                segment1.reference_start <= amplicon["insert_start"],
-                segment2.reference_end >= amplicon["insert_end"],
-            )
-
-            # if both primers, we call that "correctly paired"
-            if args.enforce_amplicon_span and not all(extends):
-                if args.verbose:
-                    print(
-                        "%s and %s skipped as pair does not fully span amplicon: %s"
-                        % (segment1.query_name, segment2.query_name, extends),
-                        file=sys.stderr,
+                    if (
+                        segment.reference_start < amplicon["start"]
+                        or segment.reference_end > amplicon["end"]
+                    ):
+                        if args.verbose:
+                            print(
+                                "%s skipped as read-pair maps outside best amplicon range"
+                                % (segment.qname),
+                                file=sys.stderr,
+                            )
+                        continue
+                    passing_reads[amplicon["name"], segment.is_reverse].append(
+                        PassRead(segment.qname, amplicon["name"], overlap, *extends)
                     )
-                continue
-            for segment in (segment1, segment2):
-                passing_reads[amplicon["name"], segment.is_reverse].append(
-                    PassRead(segment.qname, amplicon["name"], overlap, *extends)
-                )
     return passing_reads
 
 
-def overlap_trim(args):
-    """Detect to which amplicon a read is derived and according to trim primers."""
+def segment_checks(args, segment):
 
-    if args.report:
-        reportfh = open(args.report, "w")
-        reportfh.write(
-            "QueryName\tReferenceStart\tReferenceEnd\t"
-            "PrimerPair\t"
-            "Primer1\tPrimer1Start\t"
-            "Primer2\tPrimer2Start\t"
-            "IsSecondary\tIsSupplementary\t"
-            "Start\tEnd\tCorrectlyPaired\n"
-        )
+    if segment.is_unmapped:
+        if args.verbose:
+            print(
+                "%s skipped as read is unmapped" % (segment.query_name),
+                file=sys.stderr,
+            )
+        return False
+    if segment.is_supplementary and args.disregard_supplemental_reads:
+        if args.verbose:
+            print(
+                "%s skipped as supplementary" % (segment.query_name), file=sys.stderr,
+            )
+        return False
+    return True
 
+
+def generate_amplicons(args):
     # open the primer scheme and get the pools
     bed = read_bed_file(args.bedfile)
     pools = set(row["PoolName"] for row in bed)
@@ -513,7 +537,7 @@ def overlap_trim(args):
             for k, v in primer_pairs.items()
         ),
         dtype=[
-            ("name", int),
+            ("name", str),
             ("pool", int),
             ("insert_start", int),
             ("insert_end", int),
@@ -523,6 +547,24 @@ def overlap_trim(args):
             ("right_primer", "U20"),
         ],
     )
+    return amplicons, pools
+
+
+def overlap_trim(args):
+    """Detect to which amplicon a read is derived and according to trim primers."""
+
+    if args.report:
+        reportfh = open(args.report, "w")
+        reportfh.write(
+            "QueryName\tReferenceStart\tReferenceEnd\t"
+            "PrimerPair\t"
+            "Primer1\tPrimer1Start\t"
+            "Primer2\tPrimer2Start\t"
+            "IsSecondary\tIsSupplementary\t"
+            "Start\tEnd\tCorrectlyPaired\n"
+        )
+
+    amplicons, pools = generate_amplicons(args)
 
     # iterate over the alignment segments in the input BAM file
     with pysam.AlignmentFile(args.infile, "rb") as bam:
@@ -535,10 +577,7 @@ def overlap_trim(args):
                 read_group["SM"] = "pool_" + pool
                 bam_header["RG"].append(read_group)
 
-        if args.platform == "illumina":
-            passing_reads = first_pass_paired(args, bam, amplicons)
-        else:
-            passing_reads = first_pass_single(args, bam, amplicons)
+        passing_reads = first_pass(args, bam, amplicons)
 
     # filter alignments
     print(
