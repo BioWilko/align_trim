@@ -537,7 +537,7 @@ def generate_amplicons(args):
             for k, v in primer_pairs.items()
         ),
         dtype=[
-            ("name", str),
+            ("name", int),
             ("pool", int),
             ("insert_start", int),
             ("insert_end", int),
@@ -618,6 +618,7 @@ def overlap_trim(args):
                 continue
             chosen = chosen_reads[segment.qname]
             amplicon = amplicons[amplicons["name"] == chosen.amplicon]
+
             if not args.no_read_groups:
                 segment.set_tag("RG", str(amplicon["pool"][0]))
 
