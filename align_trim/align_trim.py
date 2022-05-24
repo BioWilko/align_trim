@@ -55,7 +55,7 @@ from . import align_trim_funcs
     help="Discard reads that do not cover the entire amplicon",
 )
 @click.option("--quiet", help="")
-@click.option("--output_filetype", type=click.Choice(["SAM", "BAM"]), default="SAM")
+@click.option("--output-filetype", type=click.Choice(["SAM", "BAM"]), default="SAM")
 @click.option(
     "--scheme-directory",
     help="Directory containing primer schemes (e.g. ~/artic/primer-schemes)",

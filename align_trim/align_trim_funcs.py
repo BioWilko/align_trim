@@ -395,7 +395,7 @@ def first_pass(args, bam, amplicons):
             read_pair_generator(bam), length=n_reads
         ) as bam_iterator_bar:
             for segment1, segment2 in bam_iterator_bar:
-                if segment_checks(segment1) and segment_checks(segment2):
+                if segment_checks(args, segment1) and segment_checks(args, segment2):
                     candidate = candidate_amplicon_map[
                         (segment1.reference_start + segment2.reference_end) // 2
                     ]
