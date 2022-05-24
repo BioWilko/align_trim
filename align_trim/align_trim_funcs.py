@@ -392,7 +392,7 @@ def first_pass(args, bam, amplicons):
     if args.paired:
         # Use clicks nice progress bar so users can have a pretty progress readout
         with click.progressbar(
-            read_pair_generator(bam), length=n_reads
+            read_pair_generator(bam), length=n_reads, file=sys.stderr
         ) as bam_iterator_bar:
             for segment1, segment2 in bam_iterator_bar:
                 if segment_checks(args, segment1) and segment_checks(args, segment2):
@@ -443,7 +443,9 @@ def first_pass(args, bam, amplicons):
                         )
 
     else:
-        with click.progressbar(bam, length=n_reads) as bam_iterator_bar:
+        with click.progressbar(
+            bam, length=n_reads, file=sys.stderr
+        ) as bam_iterator_bar:
             for segment in bam_iterator_bar:
                 if segment_checks(args, segment):
                     candidate = candidate_amplicon_map[
