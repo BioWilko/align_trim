@@ -10,7 +10,9 @@ import pandas as pd
 import click
 import os
 
-PassRead = namedtuple("PassRead", ("qname", "amplicon", "coverage", "left", "right"))
+PassRead = namedtuple(
+    "PassRead", ("qname", "amplicon", "coverage", "aligned_segment", "left", "right")
+)
 # consumesReference lookup for if a CIGAR operation consumes the reference sequence
 consumesReference = [True, False, True, True, False, False, False, True]
 # consumesQuery lookup for if a CIGAR operation consumes the query sequence
@@ -439,7 +441,13 @@ def first_pass(args, bam, amplicons):
                         continue
                     for segment in (segment1, segment2):
                         passing_reads[amplicon["name"], segment.is_reverse].append(
-                            PassRead(segment.qname, amplicon["name"], overlap, *extends)
+                            PassRead(
+                                segment.qname,
+                                amplicon["name"],
+                                overlap,
+                                segment,
+                                *extends,
+                            )
                         )
 
     else:
@@ -492,7 +500,9 @@ def first_pass(args, bam, amplicons):
                             )
                         continue
                     passing_reads[amplicon["name"], segment.is_reverse].append(
-                        PassRead(segment.qname, amplicon["name"], overlap, *extends)
+                        PassRead(
+                            segment.qname, amplicon["name"], overlap, segment, *extends
+                        )
                     )
     return passing_reads
 
@@ -579,16 +589,15 @@ def overlap_trim(args):
                 read_group["SM"] = "pool_" + pool
                 bam_header["RG"].append(read_group)
 
+        print(
+            "Reads before filtering: {}".format(bam.get_index_statistics()[0].total),
+            file=sys.stderr,
+        )
         passing_reads = first_pass(args, bam, amplicons)
 
-    # filter alignments
-    print(
-        "Reads before filtering: {}".format(
-            sum(len(x) for x in passing_reads.values())
-        ),
-        file=sys.stderr,
-    )
     chosen_reads = list()
+
+    # If
     if args.normalise:
         for (amp, is_reverse), reads in passing_reads.items():
             reads = sorted(reads, key=lambda x: x.coverage, reverse=True)
@@ -597,7 +606,6 @@ def overlap_trim(args):
         for reads in passing_reads.values():
             chosen_reads.extend(reads)
     print("Reads after filtering: {}".format(len(chosen_reads)), file=sys.stderr)
-    chosen_reads = {r.qname: r for r in chosen_reads}
 
     out_ft = "" if args.output_filetype == "SAM" else "b"
 
@@ -614,19 +622,17 @@ def overlap_trim(args):
     )
 
     with pysam.AlignmentFile(args.infile, "rb") as bam, out_fh as outfile:
-        for segment in bam:
-            wanted = segment.qname in chosen_reads
-            if not wanted:
-                continue
-            chosen = chosen_reads[segment.qname]
-            amplicon = amplicons[amplicons["name"] == chosen.amplicon]
+        for read in chosen_reads:
+            amplicon = amplicons[amplicons["name"] == read.amplicon]
 
             if not args.no_read_groups:
-                segment.set_tag("RG", str(amplicon["pool"][0]))
+                read.aligned_segment.set_tag("RG", str(amplicon["pool"][0]))
 
             if len(amplicon) > 1:
                 raise IndexError(
-                    "Found more than one amplicon matching: {}".format(chosen)
+                    "Found more than one amplicon matching: {}".format(
+                        read.aligned_segment.qname
+                    )
                 )
             else:
                 amplicon = amplicon[0]
@@ -636,39 +642,39 @@ def overlap_trim(args):
                 trim_start, trim_end = amplicon["insert_start"], amplicon["insert_end"]
 
             # softmask the alignment if left primer start/end inside alignment
-            if segment.reference_start < trim_start:
+            if read.aligned_segment.reference_start < trim_start:
                 try:
-                    trim(args, segment, trim_start, False)
+                    trim(args, read.aligned_segment, trim_start, False)
                 except Exception as e:
                     if args.verbose:
                         print(
                             "problem soft masking left primer in {} (error: {}), skipping".format(
-                                segment.query_name, e
+                                read.aligned_segment.query_name, e
                             ),
                             file=sys.stderr,
                         )
                     continue
 
             # softmask the alignment if right primer start/end inside alignment
-            if segment.reference_end > trim_end:
+            if read.aligned_segment.reference_end > trim_end:
                 try:
-                    trim(args, segment, trim_end, True)
+                    trim(args, read.aligned_segment, trim_end, True)
                 except Exception as e:
                     if args.verbose:
                         print(
                             "problem soft masking right primer in {} (error: {}), skipping".format(
-                                segment.query_name, e
+                                read.aligned_segment.query_name, e
                             ),
                             file=sys.stderr,
                         )
                     continue
 
             # check the the alignment still contains bases matching the reference
-            if "M" not in segment.cigarstring:
+            if "M" not in read.aligned_segment.cigarstring:
                 if args.verbose:
                     print(
                         "%s dropped as does not match reference post masking"
-                        % (segment.query_name),
+                        % (read.aligned_segment.query_name),
                         file=sys.stderr,
                     )
                 continue
@@ -691,9 +697,9 @@ def overlap_trim(args):
                 report = "\t".join(
                     str(x)
                     for x in (
-                        segment.query_name,
-                        segment.reference_start,
-                        segment.reference_end,
+                        read.aligned_segment.query_name,
+                        read.aligned_segment.reference_start,
+                        read.aligned_segment.reference_end,
                         "{}_{}".format(
                             amplicon["left_primer"], amplicon["right_primer"]
                         ),
@@ -701,15 +707,15 @@ def overlap_trim(args):
                         amplicon["start"],
                         amplicon["right_primer"],
                         amplicon["insert_end"],
-                        segment.is_secondary,
-                        segment.is_supplementary,
+                        read.aligned_segment.is_secondary,
+                        read.aligned_segment.is_supplementary,
                         amplicon["start"],
                         amplicon["end"],
                         matched,
                     )
                 )
                 print(report, file=reportfh)
-            outfile.write(segment)
+            outfile.write(read.segment)
     if args.outdir:
         pysam.sort(
             "-o", out_path, out_path,
